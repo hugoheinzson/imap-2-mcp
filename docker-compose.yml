@@ -1,0 +1,19 @@
+services:
+  imap-2-mcp:
+    build: .
+    image: imap-2-mcp:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Persist the index inside the named volume regardless of .env DB_PATH.
+      DB_PATH: /data/index.db
+    ports:
+      # Phase 1: expose only on the home network. Bind to a LAN interface or
+      # keep behind your firewall; do NOT publish publicly without auth (Phase 2).
+      - "${HOST_PORT:-8000}:8000"
+    volumes:
+      - index-data:/data
+
+volumes:
+  index-data:
