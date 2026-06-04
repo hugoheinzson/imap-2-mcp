@@ -13,7 +13,7 @@ MCP-Connector/Tool nutzbar machen — datensparsam, self-hosted, read-only.
 
 | Aspekt            | Entscheidung |
 |-------------------|--------------|
-| Mailserver        | all-inkl. `w01152ac.kasserver.com`, IMAP über SSL (Port 993) |
+| Mailserver        | all-inkl. (Kasserver), IMAP über SSL (Port 993) |
 | Postfächer        | 3 (Multi-Account) |
 | Volumen           | > 50.000 Mails → Such-Performance ist kritisch |
 | Zugriffsrechte    | **read-only** — kein Senden, Löschen, Verschieben, Markieren |
