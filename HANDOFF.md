@@ -15,7 +15,7 @@ inkl. extrahierter Anhang-Inhalte (PDF/DOCX/XLSX/Text). Details: `SPEC.md`.
   im Cloud-Container; bewusst, da Repo public ist).
 
 ## Getroffene Entscheidungen
-- Mailserver: all-inkl./Kasserver, IMAP SSL (993); **3 Accounts**; **>50k Mails**.
+- Mailserver: all-inkl./Kasserver, IMAP SSL (993); **4 Accounts**; **>50k Mails**.
 - **read-only** (kein Senden/Löschen/Verschieben/Markieren).
 - Suche: lokaler **FTS5-Volltextindex** über Header+Body+Anhang-Text (kein RAG/Embeddings).
 - Sync: **Initial + periodisch** (Default 15 Min).

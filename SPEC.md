@@ -14,7 +14,7 @@ MCP-Connector/Tool nutzbar machen — datensparsam, self-hosted, read-only.
 | Aspekt            | Entscheidung |
 |-------------------|--------------|
 | Mailserver        | all-inkl. (Kasserver), IMAP über SSL (Port 993) |
-| Postfächer        | 3 (Multi-Account) |
+| Postfächer        | 4 (Multi-Account) |
 | Volumen           | > 50.000 Mails → Such-Performance ist kritisch |
 | Zugriffsrechte    | **read-only** — kein Senden, Löschen, Verschieben, Markieren |
 | Suche             | Lokaler **SQLite-FTS5-Volltextindex** über Header + Body + extrahierten Anhang-Text |
