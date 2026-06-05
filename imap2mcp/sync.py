@@ -63,7 +63,10 @@ class SyncWorker:
             for folder in conn.list_folders():
                 if folder in self.config.excluded_folders:
                     continue
-                self._sync_folder(conn, account, folder)
+                try:
+                    self._sync_folder(conn, account, folder)
+                except Exception:  # noqa: BLE001
+                    logger.exception("Sync failed for folder %s/%s", account.name, folder)
 
     def _sync_folder(self, conn: ImapConnection, account: Account, folder: str) -> None:
         meta = conn.examine(folder)
@@ -86,11 +89,14 @@ class SyncWorker:
         logger.info("Indexing %d new messages in %s/%s", len(new_uids), account.name, folder)
         max_uid = last_uid
         for uid in new_uids:
-            raw = conn.fetch_raw(uid)
-            if raw is None:
-                continue
-            parsed = parse_message(uid, raw)
-            self._store_message(account.name, folder, parsed)
+            try:
+                raw = conn.fetch_raw(uid)
+                if raw is None:
+                    continue
+                parsed = parse_message(uid, raw)
+                self._store_message(account.name, folder, parsed)
+            except Exception:  # noqa: BLE001
+                logger.warning("Failed to index UID %d in %s/%s", uid, account.name, folder, exc_info=True)
             max_uid = max(max_uid, uid)
         self._touch_sync_state(account.name, folder, max_uid, uidvalidity)
 
@@ -141,7 +147,7 @@ class SyncWorker:
                     1 if parsed.attachments else 0,
                 ),
             )
-            if cur.lastrowid and parsed.attachments:
+            if cur.rowcount > 0 and parsed.attachments:
                 self._store_attachments(conn, cur.lastrowid, parsed)
             conn.commit()
 

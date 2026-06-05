@@ -65,7 +65,7 @@ def _body_and_attachments(msg: Message) -> tuple[str, list[Attachment]]:
     for part in msg.walk():
         if part.is_multipart():
             continue
-        disposition = (part.get("Content-Disposition") or "").lower()
+        disposition = str(part.get("Content-Disposition") or "").lower()
         ctype = part.get_content_type()
         filename = part.get_filename()
         is_attachment = "attachment" in disposition or filename is not None
