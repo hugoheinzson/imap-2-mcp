@@ -1,13 +1,16 @@
 """Read-only IMAP access built on IMAPClient.
 
-This module never issues writing IMAP commands. Mailboxes are always opened
-with ``readonly=True`` (EXAMINE, not SELECT), so flags such as \\Seen are not
-altered by reading or syncing.
+Mailboxes are always opened with ``readonly=True`` (EXAMINE, not SELECT), so
+flags such as \\Seen are not altered by reading or syncing. The single
+deliberate exception to "no writing IMAP commands" is ``append_draft``: it
+APPENDs a new message to the drafts folder and never modifies or deletes
+existing messages (no SELECT in write mode, no STORE/EXPUNGE/COPY).
 """
 
 from __future__ import annotations
 
 import email
+import re
 from dataclasses import dataclass
 from email.header import decode_header, make_header
 from email.message import Message
@@ -146,3 +149,34 @@ class ImapConnection:
         resp = self.client.fetch([uid], ["RFC822"])
         item = resp.get(uid)
         return item.get(b"RFC822") if item else None
+
+    DRAFTS_FALLBACK_NAMES = ("Entwürfe", "Drafts", "INBOX.Drafts", "INBOX/Drafts")
+
+    def find_drafts_folder(self) -> str:
+        """Locate the drafts folder via the \\Drafts SPECIAL-USE flag.
+
+        Falls back to well-known folder names if the server does not
+        advertise a flagged drafts folder.
+        """
+        folders = self.client.list_folders()
+        for flags, _delim, name in folders:
+            if b"\\Drafts" in flags:
+                return name
+        names = {name for _flags, _delim, name in folders}
+        for candidate in self.DRAFTS_FALLBACK_NAMES:
+            if candidate in names:
+                return candidate
+        raise ValueError(
+            f"No drafts folder found for account '{self.account.name}'"
+        )
+
+    def append_draft(self, folder: str, raw: bytes) -> int | None:
+        """Store a message in ``folder`` with the \\Draft flag (IMAP APPEND).
+
+        The single write operation in this module: it only ever adds a new
+        message and never touches existing ones. Returns the new UID when
+        the server reports it (UIDPLUS APPENDUID), else None.
+        """
+        resp = self.client.append(folder, raw, flags=[b"\\Draft"])
+        match = re.search(rb"APPENDUID \d+ (\d+)", resp or b"")
+        return int(match.group(1)) if match else None

@@ -56,7 +56,7 @@ Claude Desktop / claude.ai  ──HTTP/MCP──►  imap-2-mcp (Docker, self-ho
                                                              index)
 ```
 
-## MCP tools (read-only)
+## MCP tools
 
 Live (directly via IMAP):
 - `list_mailboxes` — list mailboxes/folders
@@ -73,6 +73,13 @@ Search (over the FTS5 index):
 Status:
 - `sync_status` — last sync time and indexed message count per account
 
+Drafts (the only writing tool):
+- `create_draft` — build an RFC 5322 draft (plain text; optionally threaded
+  as a reply to an indexed message via `In-Reply-To`/`References`) and store
+  it in the account's drafts folder via IMAP APPEND with the `\Draft` flag.
+  The drafts folder is detected via the SPECIAL-USE `\Drafts` flag, with a
+  fallback to well-known names. Never sends — there is no SMTP.
+
 ## Data model (SQLite)
 
 - `accounts` — configured mailboxes
@@ -85,7 +92,9 @@ Status:
 ## Configuration
 
 Via environment variables (no secrets in the repo):
-- Per account: `HOST`, `PORT`, `SSL`, `USER`, `PASSWORD`
+- Per account: `HOST`, `PORT`, `SSL`, `USER`, `PASSWORD`, and optional `FROM`
+  (From header for drafts, e.g. `Jane Doe <jane@example.org>`; defaults to
+  `USER`)
 - `SYNC_INTERVAL` (default 900s), `INDEX_ATTACHMENTS` (true)
 - `HTTP_HOST`/`HTTP_PORT` (Phase 1: bind to the local network only)
 - Attachment size limit, excluded folders (e.g. Spam/Trash)
@@ -108,7 +117,9 @@ Via environment variables (no secrets in the repo):
 
 ## Security
 
-- Strictly **read-only** against IMAP — no writing IMAP/SMTP operations.
+- **Read-only against existing mail** — no deleting, moving, or flag changes,
+  and no SMTP. The single write operation is the IMAP APPEND behind
+  `create_draft`, which only ever adds a new message to the drafts folder.
 - Credentials live only in the local environment, never in the repo.
 - Without `API_TOKEN` the endpoint is unauthenticated and must stay on a
   trusted network; set `API_TOKEN` before exposing it more widely.

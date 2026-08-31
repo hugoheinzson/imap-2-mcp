@@ -1,4 +1,5 @@
-mcp>=1.2.0
+# mcp 2.x renamed FastMCP to MCPServer and changed APIs; this code targets 1.x.
+mcp>=1.2.0,<2
 uvicorn>=0.30
 imapclient>=3.0.1
 PyMuPDF>=1.24.0

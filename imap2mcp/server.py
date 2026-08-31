@@ -1,8 +1,10 @@
-"""MCP server exposing read-only search/read tools over the local index.
+"""MCP server exposing search/read tools over the local index, plus drafts.
 
 Search and reads are served from the SQLite/FTS index (fast, offline);
-``list_mailboxes`` queries IMAP live. Transport is streamable HTTP so the
-client may run on a different machine than this server.
+``list_mailboxes`` queries IMAP live. ``create_draft`` is the only writing
+tool: it APPENDs a draft to the account's drafts folder — mail can never be
+sent from here (there is no SMTP in this project). Transport is streamable
+HTTP so the client may run on a different machine than this server.
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
+from .compose import build_draft
 from .config import Config
 from .db import Database
 from .imap_client import ImapConnection
@@ -130,6 +133,71 @@ def build_app(config: Config, db: Database, sync: SyncWorker) -> FastMCP:
         """Return the extracted text of an attachment, or None if unavailable."""
         rows = _rows("SELECT text FROM attachments WHERE id = ?", (attachment_id,))
         return rows[0]["text"] if rows else None
+
+    @mcp.tool()
+    def create_draft(
+        account: str,
+        body: str,
+        to: str | None = None,
+        subject: str | None = None,
+        cc: str | None = None,
+        bcc: str | None = None,
+        reply_to_message_id: int | None = None,
+    ) -> dict:
+        """Create a draft e-mail in the account's IMAP drafts folder.
+
+        The draft is only stored (IMAP APPEND with the \\Draft flag) — it is
+        NEVER sent; sending stays a manual step in the mail client. With
+        ``reply_to_message_id`` (the id of an indexed message) the draft is
+        threaded as a reply: ``to`` defaults to the original sender and
+        ``subject`` to ``Re: <original subject>``.
+        """
+        acc = config.account(account)
+        if acc is None:
+            raise ValueError(f"Unknown account '{account}'")
+
+        in_reply_to: str | None = None
+        if reply_to_message_id is not None:
+            rows = _rows(
+                "SELECT message_id, from_addr, subject FROM messages WHERE id = ?",
+                (reply_to_message_id,),
+            )
+            if not rows:
+                raise ValueError(f"No indexed message with id {reply_to_message_id}")
+            orig = rows[0]
+            in_reply_to = orig["message_id"]  # may be None; then no threading headers
+            if to is None:
+                to = orig["from_addr"]
+            if subject is None:
+                subject = orig["subject"] or ""
+                if not subject.lower().startswith("re:"):
+                    subject = f"Re: {subject}"
+        if not to or not subject:
+            raise ValueError(
+                "'to' and 'subject' are required unless replying to an indexed message"
+            )
+
+        raw, draft_message_id = build_draft(
+            from_addr=acc.from_addr or acc.user,
+            to=to,
+            subject=subject,
+            body=body,
+            cc=cc,
+            bcc=bcc,
+            in_reply_to=in_reply_to,
+        )
+        with ImapConnection(acc) as conn:
+            folder = conn.find_drafts_folder()
+            uid = conn.append_draft(folder, raw)
+        logger.info("Draft created: account=%s folder=%s uid=%s", account, folder, uid)
+        return {
+            "account": account,
+            "folder": folder,
+            "uid": uid,
+            "message_id": draft_message_id,
+            "to": to,
+            "subject": subject,
+        }
 
     @mcp.tool()
     def sync_status() -> dict:

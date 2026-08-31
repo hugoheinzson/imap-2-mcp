@@ -24,6 +24,9 @@ class Account:
     ssl: bool
     user: str
     password: str
+    # From header for drafts, e.g. "Jane Doe <jane@example.org>".
+    # Falls back to the login user (which must then be an address).
+    from_addr: str | None = None
 
 
 @dataclass(frozen=True)
@@ -64,6 +67,7 @@ class Config:
                     ssl=_bool(os.environ.get(prefix + "SSL"), True),
                     user=user,
                     password=password,
+                    from_addr=os.environ.get(prefix + "FROM") or None,
                 )
             )
         if not accounts:

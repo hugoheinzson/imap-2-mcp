@@ -1,22 +1,27 @@
 # imap-2-mcp
 
-Read-only MCP server that makes IMAP mailboxes searchable for AI clients such
-as Claude. It combines **live IMAP access** with a **local SQLite FTS5 index**
+MCP server that makes IMAP mailboxes searchable for AI clients such as
+Claude. It combines **live IMAP access** with a **local SQLite FTS5 index**
 that also covers **attachment contents** (PDF/DOCX/XLSX/text), so full-text
 search stays fast even for large mailboxes (50k+ messages).
 
-> Strictly read-only: it never sends, deletes, moves, or flags mail.
+> Read-only against existing mail: it never sends, deletes, moves, or flags
+> anything. The single write operation is `create_draft`, which APPENDs a
+> new draft to the drafts folder — sending stays a manual step in your mail
+> client (there is no SMTP in this project).
 
 See [`SPEC.md`](./SPEC.md) for the full design and rationale.
 
 ## Features (Phase 1)
 
-- Multi-account IMAP (SSL), read-only.
+- Multi-account IMAP (SSL), read-only against existing mail.
 - Background sync worker: initial full index + periodic incremental updates.
 - Attachment text extraction (PDF, DOCX, XLSX, plain text).
+- Draft creation (`create_draft`): store a draft — optionally threaded as a
+  reply — in the account's drafts folder; never sends.
 - MCP tools over streamable HTTP (client may run on another machine):
   `list_mailboxes`, `list_recent`, `get_email`, `get_thread`, `search`,
-  `search_attachments`, `get_attachment_text`, `sync_status`.
+  `search_attachments`, `get_attachment_text`, `create_draft`, `sync_status`.
 
 ## Quick start
 
