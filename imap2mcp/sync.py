@@ -60,13 +60,43 @@ class SyncWorker:
 
     def _sync_account(self, account: Account) -> None:
         with ImapConnection(account) as conn:
-            for folder in conn.list_folders():
-                if folder in self.config.excluded_folders:
-                    continue
+            for folder in self._select_folders(account, conn.list_folders_with_flags()):
                 try:
                     self._sync_folder(conn, account, folder)
                 except Exception:  # noqa: BLE001
                     logger.exception("Sync failed for folder %s/%s", account.name, folder)
+
+    def _select_folders(
+        self, account: Account, folders: list[tuple[str, set[str]]]
+    ) -> list[str]:
+        """Resolve which folders to sync for ``account``.
+
+        With an explicit include-list (``ACCOUNT_<NAME>_FOLDERS``) only those are
+        synced; entries starting with ``\\`` match a SPECIAL-USE flag (e.g.
+        ``\\All`` → Gmail's localized All-Mail folder). Without one, every
+        selectable folder minus the global ``EXCLUDED_FOLDERS`` is synced.
+        """
+        if account.folders:
+            selected: list[str] = []
+            for spec in account.folders:
+                if spec.startswith("\\"):
+                    matches = [name for name, flags in folders if spec in flags]
+                else:
+                    matches = [name for name, _flags in folders if name == spec]
+                if not matches:
+                    logger.warning(
+                        "Configured folder %r not found for account %s",
+                        spec, account.name,
+                    )
+                for name in matches:
+                    if name not in selected:
+                        selected.append(name)
+            return selected
+        return [
+            name
+            for name, flags in folders
+            if "\\Noselect" not in flags and name not in self.config.excluded_folders
+        ]
 
     def _sync_folder(self, conn: ImapConnection, account: Account, folder: str) -> None:
         meta = conn.examine(folder)

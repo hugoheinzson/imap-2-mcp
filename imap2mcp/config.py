@@ -27,6 +27,12 @@ class Account:
     # From header for drafts, e.g. "Jane Doe <jane@example.org>".
     # Falls back to the login user (which must then be an address).
     from_addr: str | None = None
+    # Optional include-list of folders to sync for this account. When empty,
+    # all selectable folders (minus global EXCLUDED_FOLDERS) are indexed.
+    # Entries starting with "\" are matched against SPECIAL-USE flags rather
+    # than names, e.g. "\All" selects Gmail's All-Mail folder regardless of
+    # its localized name ("[Gmail]/All Mail" vs "[Gmail]/Alle Nachrichten").
+    folders: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -68,6 +74,11 @@ class Config:
                     user=user,
                     password=password,
                     from_addr=os.environ.get(prefix + "FROM") or None,
+                    folders=tuple(
+                        f.strip()
+                        for f in os.environ.get(prefix + "FOLDERS", "").split(",")
+                        if f.strip()
+                    ),
                 )
             )
         if not accounts:

@@ -137,6 +137,14 @@ class ImapConnection:
     def list_folders(self) -> list[str]:
         return [entry[2] for entry in self.client.list_folders()]
 
+    def list_folders_with_flags(self) -> list[tuple[str, set[str]]]:
+        """Return ``(name, flags)`` per folder, flags decoded to a str set."""
+        out: list[tuple[str, set[str]]] = []
+        for flags, _delim, name in self.client.list_folders():
+            decoded = {f.decode() if isinstance(f, bytes) else f for f in flags}
+            out.append((name, decoded))
+        return out
+
     def examine(self, folder: str) -> dict:
         """Open a folder read-only; returns SELECT/EXAMINE response."""
         return self.client.select_folder(folder, readonly=True)
