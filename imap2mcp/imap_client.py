@@ -10,11 +10,13 @@ existing messages (no SELECT in write mode, no STORE/EXPUNGE/COPY).
 from __future__ import annotations
 
 import email
+import html
 import re
 from dataclasses import dataclass
 from email.header import decode_header, make_header
 from email.message import Message
 from email.utils import parsedate_to_datetime
+from html.parser import HTMLParser
 
 from imapclient import IMAPClient
 
@@ -62,8 +64,63 @@ def _iso_date(msg: Message) -> str | None:
         return None
 
 
+class _HtmlText(HTMLParser):
+    """Collect visible text from HTML, dropping script/style/head content."""
+
+    _SKIP = {"script", "style", "head", "title"}
+    _BREAK = {"br", "p", "div", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6", "table"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag, attrs) -> None:
+        if tag in self._SKIP:
+            self._skip_depth += 1
+        elif tag in self._BREAK:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag) -> None:
+        if tag in self._SKIP and self._skip_depth:
+            self._skip_depth -= 1
+        elif tag in self._BREAK or tag == "td":
+            self.parts.append("\n" if tag in self._BREAK else " ")
+
+    def handle_data(self, data) -> None:
+        if not self._skip_depth:
+            self.parts.append(data)
+
+
+def html_to_text(markup: str) -> str:
+    parser = _HtmlText()
+    try:
+        parser.feed(markup)
+        parser.close()
+    except Exception:  # noqa: BLE001 - malformed HTML degrades to tag stripping
+        return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", markup)).split())
+    text = "".join(parser.parts).replace("\u00a0", " ").replace("\u200c", "")
+    lines = (" ".join(line.split()) for line in text.splitlines())
+    return "\n".join(line for line in lines if line)
+
+
+def _decode_text(part: Message) -> str:
+    payload = part.get_payload(decode=True) or b""
+    charset = part.get_content_charset() or "utf-8"
+    try:
+        return payload.decode(charset, errors="replace")
+    except LookupError:  # unknown charset label
+        return payload.decode("utf-8", errors="replace")
+
+
 def _body_and_attachments(msg: Message) -> tuple[str, list[Attachment]]:
+    """Plain-text body, falling back to text extracted from HTML parts.
+
+    Many senders (Apple, PayPal, …) ship HTML only or an empty text/plain
+    alternative, so the HTML is used whenever no usable plain text exists.
+    """
     body_parts: list[str] = []
+    html_parts: list[str] = []
     attachments: list[Attachment] = []
     for part in msg.walk():
         if part.is_multipart():
@@ -83,10 +140,13 @@ def _body_and_attachments(msg: Message) -> tuple[str, list[Attachment]]:
                 )
             )
         elif ctype == "text/plain":
-            payload = part.get_payload(decode=True) or b""
-            charset = part.get_content_charset() or "utf-8"
-            body_parts.append(payload.decode(charset, errors="replace"))
-    return ("\n".join(body_parts).strip(), attachments)
+            body_parts.append(_decode_text(part))
+        elif ctype == "text/html":
+            html_parts.append(_decode_text(part))
+    body = "\n".join(body_parts).strip()
+    if not body and html_parts:
+        body = "\n".join(html_to_text(h) for h in html_parts).strip()
+    return (body, attachments)
 
 
 def parse_message(uid: int, raw: bytes) -> ParsedEmail:

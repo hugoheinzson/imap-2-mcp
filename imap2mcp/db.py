@@ -72,6 +72,12 @@ CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
     INSERT INTO messages_fts(messages_fts, rowid, subject, body, from_addr, to_addr)
     VALUES ('delete', old.id, old.subject, old.body, old.from_addr, old.to_addr);
 END;
+CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, subject, body, from_addr, to_addr)
+    VALUES ('delete', old.id, old.subject, old.body, old.from_addr, old.to_addr);
+    INSERT INTO messages_fts(rowid, subject, body, from_addr, to_addr)
+    VALUES (new.id, new.subject, new.body, new.from_addr, new.to_addr);
+END;
 
 CREATE TRIGGER IF NOT EXISTS attachments_ai AFTER INSERT ON attachments BEGIN
     INSERT INTO attachments_fts(rowid, filename, text)
