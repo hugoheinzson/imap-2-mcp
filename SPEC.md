@@ -80,6 +80,17 @@ Drafts (the only writing tool):
   The drafts folder is detected via the SPECIAL-USE `\Drafts` flag, with a
   fallback to well-known names. Never sends — there is no SMTP.
 
+Archiving (optional, only registered when Paperless is configured):
+- `send_attachment_to_paperless` — the index stores attachment text only, so
+  the original message is re-fetched via EXAMINE (read-only) at its recorded
+  folder/UID — falling back to other indexed copies and a `Message-ID` header
+  search if it moved — and the attachment is identified by position,
+  filename and size. It is posted server-side to Paperless'
+  `post_document` endpoint with optional title, date, correspondent,
+  document type and tags; the tool then waits briefly for the consumer task
+  and returns the new document id or the failure (e.g. duplicate).
+  `dry_run` fetches and checks the file without uploading.
+
 ## Data model (SQLite)
 
 - `accounts` — configured mailboxes
@@ -100,6 +111,8 @@ Via environment variables (no secrets in the repo):
 - Attachment size limit, excluded folders (e.g. Spam/Trash)
 - `API_TOKEN` (optional) — when set, requests must present a matching bearer
   token (see Security)
+- `PAPERLESS_URL` + `PAPERLESS_API_TOKEN` (optional) — enable
+  `send_attachment_to_paperless`
 
 ## Phases
 

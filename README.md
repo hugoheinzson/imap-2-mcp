@@ -19,9 +19,14 @@ See [`SPEC.md`](./SPEC.md) for the full design and rationale.
 - Attachment text extraction (PDF, DOCX, XLSX, plain text).
 - Draft creation (`create_draft`): store a draft — optionally threaded as a
   reply — in the account's drafts folder; never sends.
+- Optional Paperless-ngx hand-off (`send_attachment_to_paperless`): re-fetch
+  an attachment from IMAP and upload it straight to Paperless — the file
+  never passes through the client. Enabled via `PAPERLESS_URL` +
+  `PAPERLESS_API_TOKEN`.
 - MCP tools over streamable HTTP (client may run on another machine):
   `list_mailboxes`, `list_recent`, `get_email`, `get_thread`, `search`,
-  `search_attachments`, `get_attachment_text`, `create_draft`, `sync_status`.
+  `search_attachments`, `get_attachment_text`, `create_draft`, `sync_status`
+  (+ `send_attachment_to_paperless` when configured).
 
 ## Quick start
 

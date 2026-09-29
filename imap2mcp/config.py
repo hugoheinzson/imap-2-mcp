@@ -46,6 +46,10 @@ class Config:
     excluded_folders: tuple[str, ...]
     accounts: tuple[Account, ...] = field(default_factory=tuple)
     api_token: str | None = None
+    # Optional Paperless-ngx hand-off (send_attachment_to_paperless). The
+    # tool is only registered when both are set.
+    paperless_url: str | None = None
+    paperless_token: str | None = None
 
     @staticmethod
     def from_env() -> "Config":
@@ -99,6 +103,8 @@ class Config:
             excluded_folders=excluded,
             accounts=tuple(accounts),
             api_token=os.environ.get("API_TOKEN") or None,
+            paperless_url=os.environ.get("PAPERLESS_URL") or None,
+            paperless_token=os.environ.get("PAPERLESS_API_TOKEN") or None,
         )
 
     def account(self, name: str) -> Account | None:

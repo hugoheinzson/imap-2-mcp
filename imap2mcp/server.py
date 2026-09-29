@@ -1,9 +1,11 @@
 """MCP server exposing search/read tools over the local index, plus drafts.
 
 Search and reads are served from the SQLite/FTS index (fast, offline);
-``list_mailboxes`` queries IMAP live. ``create_draft`` is the only writing
-tool: it APPENDs a draft to the account's drafts folder — mail can never be
-sent from here (there is no SMTP in this project). Transport is streamable
+``list_mailboxes`` queries IMAP live. ``create_draft`` is the only tool that
+writes to IMAP: it APPENDs a draft to the account's drafts folder — mail can
+never be sent from here (there is no SMTP in this project). The optional
+``send_attachment_to_paperless`` re-fetches an attachment read-only and posts
+it to Paperless-ngx; it never changes the mailbox. Transport is streamable
 HTTP so the client may run on a different machine than this server.
 """
 
@@ -11,12 +13,21 @@ from __future__ import annotations
 
 import logging
 
+import anyio
+
 from mcp.server.fastmcp import FastMCP
 
 from .compose import build_draft
 from .config import Config
 from .db import Database
 from .imap_client import ImapConnection
+from .paperless import (
+    PaperlessClient,
+    fetch_attachment,
+    task_document_id,
+    task_error,
+    task_status,
+)
 from .sync import SyncWorker
 
 logger = logging.getLogger(__name__)
@@ -212,5 +223,96 @@ def build_app(config: Config, db: Database, sync: SyncWorker) -> FastMCP:
             (),
         )
         return {"folders": state, "counts": counts}
+
+    if config.paperless_url and config.paperless_token:
+        paperless = PaperlessClient(config.paperless_url, config.paperless_token)
+
+        @mcp.tool()
+        async def send_attachment_to_paperless(
+            attachment_id: int,
+            title: str | None = None,
+            filename: str | None = None,
+            created: str | None = None,
+            correspondent_id: int | None = None,
+            document_type_id: int | None = None,
+            tag_ids: list[int] | None = None,
+            dry_run: bool = False,
+            allow_duplicate: bool = False,
+        ) -> dict:
+            """Archive an e-mail attachment in Paperless-ngx.
+
+            The index holds only attachment *text*; this re-downloads the
+            original file from the IMAP server (read-only) and uploads it
+            directly to Paperless — the file never passes through the client.
+            Find ``attachment_id`` via ``get_email`` or ``search_attachments``.
+
+            Metadata is optional; Paperless' own matching fills in what is
+            left out. ``correspondent_id``/``document_type_id``/``tag_ids`` are
+            Paperless ids. ``created`` is an ISO date (YYYY-MM-DD).
+            ``filename`` overrides the uploaded file name. With
+            ``dry_run=True`` the file is fetched and checked but not uploaded.
+
+            A byte-identical file already in Paperless is not uploaded again
+            (status ``DUPLICATE`` with the existing document ids) unless
+            ``allow_duplicate=True``.
+
+            Waits briefly for Paperless to consume the file and returns the new
+            document id, or the failure reason, or just the task id if
+            consumption is still running.
+            """
+            # IMAP fetch, upload and task polling block for up to a minute:
+            # keep them off the event loop so other tool calls stay responsive.
+            return await anyio.to_thread.run_sync(
+                lambda: _send_to_paperless(
+                    attachment_id, title, filename, created, correspondent_id,
+                    document_type_id, tag_ids, dry_run, allow_duplicate,
+                )
+            )
+
+        def _send_to_paperless(
+            attachment_id, title, filename, created, correspondent_id,
+            document_type_id, tag_ids, dry_run, allow_duplicate,
+        ) -> dict:
+            att = fetch_attachment(config, db, attachment_id)
+            info = {
+                "attachment_id": attachment_id,
+                "filename": filename or att.filename,
+                "mime_type": att.mime_type,
+                "size": len(att.data),
+                "sha256": att.sha256,
+                "source": f"{att.account}/{att.folder}/uid {att.uid}",
+            }
+            existing = paperless.find_by_checksum(att)
+            if existing:
+                info["existing_documents"] = existing
+            if dry_run:
+                return {**info, "status": "DRY_RUN", "uploaded": False}
+            if existing and not allow_duplicate:
+                return {
+                    **info,
+                    "status": "DUPLICATE",
+                    "uploaded": False,
+                    "note": "identical file already archived; pass allow_duplicate=True to upload anyway",
+                }
+            task_id = paperless.upload(
+                att,
+                filename=filename,
+                title=title,
+                created=created,
+                correspondent_id=correspondent_id,
+                document_type_id=document_type_id,
+                tag_ids=tag_ids,
+            )
+            logger.info("Attachment %s sent to Paperless, task %s", attachment_id, task_id)
+            task = paperless.wait_for_task(task_id)
+            status = task_status(task)
+            result = {**info, "uploaded": True, "task_id": task_id, "status": status}
+            if status == "SUCCESS":
+                result["document_id"] = task_document_id(task)
+            elif status in ("FAILURE", "REVOKED"):
+                result["error"] = task_error(task)
+            else:
+                result["note"] = "still processing in Paperless; check the task later"
+            return result
 
     return mcp
