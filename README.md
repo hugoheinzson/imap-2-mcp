@@ -18,7 +18,9 @@ See [`SPEC.md`](./SPEC.md) for the full design and rationale.
 - Background sync worker: initial full index + periodic incremental updates.
 - Attachment text extraction (PDF, DOCX, XLSX, plain text).
 - Draft creation (`create_draft`): store a draft — optionally threaded as a
-  reply — in the account's drafts folder; never sends.
+  reply, optionally with attachments taken from indexed mails
+  (`attachment_ids`) or Paperless-ngx (`paperless_document_ids`, max 20 MB in
+  total) — in the account's drafts folder; never sends.
 - Optional Paperless-ngx hand-off (`send_attachment_to_paperless`): re-fetch
   an attachment from IMAP and upload it straight to Paperless — the file
   never passes through the client. Enabled via `PAPERLESS_URL` +

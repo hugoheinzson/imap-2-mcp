@@ -1,7 +1,7 @@
 """Compose RFC 5322 draft messages.
 
 Builds plain-text drafts (optionally threaded as replies onto an existing
-message) for storage via IMAP APPEND. Nothing in this module can send mail;
+message, optionally with file attachments) for storage via IMAP APPEND. Nothing in this module can send mail;
 there is no SMTP anywhere in this project.
 """
 
@@ -20,8 +20,13 @@ def build_draft(
     bcc: str | None = None,
     in_reply_to: str | None = None,
     references: str | None = None,
+    attachments: list[tuple[str, str | None, bytes]] | None = None,
 ) -> tuple[bytes, str]:
-    """Return the raw draft message and its generated Message-ID."""
+    """Return the raw draft message and its generated Message-ID.
+
+    ``attachments`` are ``(filename, mime_type, data)`` triples; with any
+    present the draft becomes multipart/mixed.
+    """
     msg = EmailMessage()
     msg["From"] = from_addr
     msg["To"] = to
@@ -37,4 +42,9 @@ def build_draft(
         msg["In-Reply-To"] = in_reply_to
         msg["References"] = references or in_reply_to
     msg.set_content(body)
+    for filename, mime_type, data in attachments or []:
+        maintype, _, subtype = (mime_type or "application/octet-stream").partition("/")
+        msg.add_attachment(
+            data, maintype=maintype, subtype=subtype or "octet-stream", filename=filename
+        )
     return msg.as_bytes(), message_id

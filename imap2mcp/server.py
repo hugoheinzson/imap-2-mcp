@@ -2,8 +2,9 @@
 
 Search and reads are served from the SQLite/FTS index (fast, offline);
 ``list_mailboxes`` queries IMAP live. ``create_draft`` is the only tool that
-writes to IMAP: it APPENDs a draft to the account's drafts folder — mail can
-never be sent from here (there is no SMTP in this project). The optional
+writes to IMAP: it APPENDs a draft (optionally with attachments re-fetched
+from IMAP or Paperless) to the account's drafts folder — mail can never be
+sent from here (there is no SMTP in this project). The optional
 ``send_attachment_to_paperless`` re-fetches an attachment read-only and posts
 it to Paperless-ngx; it never changes the mailbox. Transport is streamable
 HTTP so the client may run on a different machine than this server.
@@ -32,9 +33,18 @@ from .sync import SyncWorker
 
 logger = logging.getLogger(__name__)
 
+# Upper bound for all attachments of one draft. Base64 adds a third, and most
+# providers reject messages above ~25 MB.
+MAX_DRAFT_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
 
 def build_app(config: Config, db: Database, sync: SyncWorker) -> FastMCP:
     mcp = FastMCP("imap-2-mcp", host=config.http_host, port=config.http_port)
+    paperless = (
+        PaperlessClient(config.paperless_url, config.paperless_token)
+        if config.paperless_url and config.paperless_token
+        else None
+    )
 
     def _rows(query: str, params: tuple) -> list[dict]:
         with db.connect() as conn:
@@ -146,7 +156,7 @@ def build_app(config: Config, db: Database, sync: SyncWorker) -> FastMCP:
         return rows[0]["text"] if rows else None
 
     @mcp.tool()
-    def create_draft(
+    async def create_draft(
         account: str,
         body: str,
         to: str | None = None,
@@ -154,6 +164,9 @@ def build_app(config: Config, db: Database, sync: SyncWorker) -> FastMCP:
         cc: str | None = None,
         bcc: str | None = None,
         reply_to_message_id: int | None = None,
+        attachment_ids: list[int] | None = None,
+        paperless_document_ids: list[int] | None = None,
+        paperless_original: bool = False,
     ) -> dict:
         """Create a draft e-mail in the account's IMAP drafts folder.
 
@@ -162,10 +175,32 @@ def build_app(config: Config, db: Database, sync: SyncWorker) -> FastMCP:
         ``reply_to_message_id`` (the id of an indexed message) the draft is
         threaded as a reply: ``to`` defaults to the original sender and
         ``subject`` to ``Re: <original subject>``.
+
+        Files can be attached server-side (they never pass through the
+        client): ``attachment_ids`` are ids of attachments of indexed mails
+        (from ``get_email``/``search_attachments``, any account), re-fetched
+        read-only from IMAP. ``paperless_document_ids`` are Paperless-ngx
+        document ids (only when Paperless is configured); by default the
+        archived PDF is attached, ``paperless_original=True`` attaches the
+        file as originally consumed. At most 20 MB in total.
         """
+        # IMAP fetches and Paperless downloads block: keep them off the loop.
+        return await anyio.to_thread.run_sync(
+            lambda: _create_draft(
+                account, body, to, subject, cc, bcc, reply_to_message_id,
+                attachment_ids or [], paperless_document_ids or [], paperless_original,
+            )
+        )
+
+    def _create_draft(
+        account, body, to, subject, cc, bcc, reply_to_message_id,
+        attachment_ids, paperless_document_ids, paperless_original,
+    ) -> dict:
         acc = config.account(account)
         if acc is None:
             raise ValueError(f"Unknown account '{account}'")
+        if paperless_document_ids and paperless is None:
+            raise ValueError("Paperless is not configured (PAPERLESS_URL/PAPERLESS_API_TOKEN)")
 
         in_reply_to: str | None = None
         if reply_to_message_id is not None:
@@ -188,6 +223,19 @@ def build_app(config: Config, db: Database, sync: SyncWorker) -> FastMCP:
                 "'to' and 'subject' are required unless replying to an indexed message"
             )
 
+        files: list[tuple[str, str | None, bytes]] = []
+        for att_id in attachment_ids:
+            att = fetch_attachment(config, db, att_id)
+            files.append((att.filename, att.mime_type, att.data))
+        for doc_id in paperless_document_ids:
+            files.append(paperless.download(doc_id, original=paperless_original))
+        total = sum(len(data) for _, _, data in files)
+        if total > MAX_DRAFT_ATTACHMENT_BYTES:
+            raise ValueError(
+                f"Attachments total {total / 1048576:.1f} MB, limit is "
+                f"{MAX_DRAFT_ATTACHMENT_BYTES // 1048576} MB"
+            )
+
         raw, draft_message_id = build_draft(
             from_addr=acc.from_addr or acc.user,
             to=to,
@@ -196,11 +244,15 @@ def build_app(config: Config, db: Database, sync: SyncWorker) -> FastMCP:
             cc=cc,
             bcc=bcc,
             in_reply_to=in_reply_to,
+            attachments=files,
         )
         with ImapConnection(acc) as conn:
             folder = conn.find_drafts_folder()
             uid = conn.append_draft(folder, raw)
-        logger.info("Draft created: account=%s folder=%s uid=%s", account, folder, uid)
+        logger.info(
+            "Draft created: account=%s folder=%s uid=%s attachments=%d",
+            account, folder, uid, len(files),
+        )
         return {
             "account": account,
             "folder": folder,
@@ -208,6 +260,10 @@ def build_app(config: Config, db: Database, sync: SyncWorker) -> FastMCP:
             "message_id": draft_message_id,
             "to": to,
             "subject": subject,
+            "attachments": [
+                {"filename": name, "mime_type": mime, "size": len(data)}
+                for name, mime, data in files
+            ],
         }
 
     @mcp.tool()
@@ -224,8 +280,7 @@ def build_app(config: Config, db: Database, sync: SyncWorker) -> FastMCP:
         )
         return {"folders": state, "counts": counts}
 
-    if config.paperless_url and config.paperless_token:
-        paperless = PaperlessClient(config.paperless_url, config.paperless_token)
+    if paperless is not None:
 
         @mcp.tool()
         async def send_attachment_to_paperless(

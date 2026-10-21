@@ -16,6 +16,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from urllib.parse import unquote
 
 import httpx
 
@@ -151,6 +152,30 @@ class PaperlessClient:
         self.url = url.rstrip("/")
         self.headers = {"Authorization": f"Token {token}", "Accept": "application/json"}
 
+    def download(self, document_id: int, original: bool = False) -> tuple[str, str, bytes]:
+        """Fetch a document's file: ``(filename, mime_type, data)``.
+
+        Default is the archived PDF (PDF/A with text layer); ``original=True``
+        returns the file as it was consumed.
+        """
+        r = httpx.get(
+            f"{self.url}/api/documents/{document_id}/download/",
+            params={"original": "true"} if original else None,
+            headers=self.headers, timeout=60, follow_redirects=True,
+        )
+        if r.status_code == 404:
+            raise ValueError(f"No Paperless document with id {document_id}")
+        if r.status_code >= 400:
+            raise ValueError(
+                f"Paperless download of document {document_id} failed ({r.status_code})"
+            )
+        return (
+            _disposition_filename(r.headers.get("content-disposition", ""))
+            or f"paperless-{document_id}.pdf",
+            r.headers.get("content-type", "application/octet-stream").split(";")[0].strip(),
+            r.content,
+        )
+
     def find_by_checksum(self, att: FetchedAttachment) -> list[dict]:
         """Existing documents whose original file is byte-identical.
 
@@ -226,6 +251,16 @@ class PaperlessClient:
                     return task
             time.sleep(2)
         return task
+
+
+def _disposition_filename(header: str) -> str | None:
+    """Filename from Content-Disposition, preferring RFC 5987 ``filename*``
+    (Paperless puts the umlaut-preserving name there)."""
+    m = re.search(r"filename\*\s*=\s*[^']*'[^']*'([^;]+)", header)
+    if m:
+        return clean_filename(unquote(m.group(1).strip().strip('"')))
+    m = re.search(r'filename\s*=\s*"?([^";]+)"?', header)
+    return clean_filename(m.group(1)) if m else None
 
 
 # Paperless 2.x reports "SUCCESS" plus related_document/result; 3.x reports
