@@ -79,6 +79,17 @@ Drafts (the only writing tools):
   it in the account's drafts folder via IMAP APPEND with the `\Draft` flag.
   The drafts folder is detected via the SPECIAL-USE `\Drafts` flag, with a
   fallback to well-known names. Never sends — there is no SMTP.
+- `create_draft` attachment sources (all resolved server-side, 20 MB in total):
+  indexed-mail attachments (`attachment_ids`), Paperless documents
+  (`paperless_document_ids`), files of a read-only **drop folder**
+  (`attachment_files`, listed by `list_attachment_files`; path traversal and
+  symlinks leaving the folder are refused, hidden/temporary files ignored),
+  **URLs** (`attachment_urls`; http(s) to public addresses only — private,
+  loopback, link-local and CGNAT ranges are refused on every redirect hop;
+  Dropbox share links are rewritten to direct downloads; HTML pages are
+  refused) and **inline** content (`inline_attachments`: text or base64).
+  Files that exist only in a chat cannot be attached: the model never holds
+  their bytes.
 - `list_drafts` — live listing of the drafts folder (uid, Message-ID, to,
   subject, date), the identifiers `delete_draft` accepts.
 - `delete_draft` — remove one draft by UID or `Message-ID` header. Fenced:

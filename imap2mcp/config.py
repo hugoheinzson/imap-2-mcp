@@ -50,6 +50,9 @@ class Config:
     # tool is only registered when both are set.
     paperless_url: str | None = None
     paperless_token: str | None = None
+    # Optional drop folder (mounted read-only) whose files create_draft can
+    # attach by relative path; filled by the user from any device.
+    attachment_dir: str | None = None
 
     @staticmethod
     def from_env() -> "Config":
@@ -105,6 +108,7 @@ class Config:
             api_token=os.environ.get("API_TOKEN") or None,
             paperless_url=os.environ.get("PAPERLESS_URL") or None,
             paperless_token=os.environ.get("PAPERLESS_API_TOKEN") or None,
+            attachment_dir=os.environ.get("ATTACHMENT_DIR") or None,
         )
 
     def account(self, name: str) -> Account | None:

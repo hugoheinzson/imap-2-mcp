@@ -21,7 +21,14 @@ See [`SPEC.md`](./SPEC.md) for the full design and rationale.
 - Draft creation (`create_draft`): store a draft — optionally threaded as a
   reply, optionally with attachments taken from indexed mails
   (`attachment_ids`) or Paperless-ngx (`paperless_document_ids`, max 20 MB in
-  total) — in the account's drafts folder; never sends.
+  total) — in the account's drafts folder; never sends. Files that exist
+  nowhere on the server can come from a **drop folder** (`attachment_files`,
+  see `list_attachment_files`; mount a synced cloud folder via
+  `ATTACHMENT_HOST_DIR` to fill it from any device), from a **URL**
+  (`attachment_urls`; Dropbox share links work; public addresses only) or as
+  **inline text/base64** (`inline_attachments`, for small generated files).
+  Files that live only in a chat cannot be attached — the server never sees
+  their bytes.
 - Draft management: `list_drafts` shows the drafts folder live,
   `delete_draft` permanently removes one draft (by `uid` or `message_id`;
   refuses anything not flagged `\Draft`).
@@ -32,7 +39,7 @@ See [`SPEC.md`](./SPEC.md) for the full design and rationale.
 - MCP tools over streamable HTTP (client may run on another machine):
   `list_mailboxes`, `list_recent`, `get_email`, `get_thread`, `search`,
   `search_attachments`, `get_attachment_text`, `create_draft`, `list_drafts`,
-  `delete_draft`, `sync_status`
+  `delete_draft`, `list_attachment_files`, `sync_status`
   (+ `send_attachment_to_paperless` when configured).
 
 ## Quick start

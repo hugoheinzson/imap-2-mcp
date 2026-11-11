@@ -20,6 +20,13 @@ import anyio
 
 from mcp.server.fastmcp import FastMCP
 
+from .attachments import (
+    InlineAttachment,
+    download_url,
+    list_drop_files,
+    read_drop_file,
+    read_inline,
+)
 from .compose import build_draft
 from .config import Config
 from .db import Database
@@ -169,6 +176,9 @@ def build_app(config: Config, db: Database, sync: SyncWorker) -> FastMCP:
         attachment_ids: list[int] | None = None,
         paperless_document_ids: list[int] | None = None,
         paperless_original: bool = False,
+        attachment_files: list[str] | None = None,
+        attachment_urls: list[str] | None = None,
+        inline_attachments: list[InlineAttachment] | None = None,
     ) -> dict:
         """Create a draft e-mail in the account's IMAP drafts folder.
 
@@ -185,24 +195,43 @@ def build_app(config: Config, db: Database, sync: SyncWorker) -> FastMCP:
         document ids (only when Paperless is configured); by default the
         archived PDF is attached, ``paperless_original=True`` attaches the
         file as originally consumed. At most 20 MB in total.
+
+        More sources, for files that are not in a mail or in Paperless:
+        ``attachment_files`` are paths inside the server's drop folder (see
+        ``list_attachment_files``; the user fills it from any device, e.g. via
+        Dropbox). ``attachment_urls`` are direct download links the server
+        fetches itself (Dropbox share links work as they are). For small
+        things you write yourself (an .ics, .csv, .txt, .vcf) use
+        ``inline_attachments`` with ``filename`` and ``content`` (text) or
+        ``content_base64``.
+
+        IMPORTANT: a file that exists only in the chat (an upload, a pasted
+        image) cannot be attached — the server never receives its bytes. Do not
+        create the draft without it silently: tell the user to put the file
+        into the drop folder or send a share link, then attach it from there.
+        The result lists every attachment actually included.
         """
         # IMAP fetches and Paperless downloads block: keep them off the loop.
         return await anyio.to_thread.run_sync(
             lambda: _create_draft(
                 account, body, to, subject, cc, bcc, reply_to_message_id,
                 attachment_ids or [], paperless_document_ids or [], paperless_original,
+                attachment_files or [], attachment_urls or [], inline_attachments or [],
             )
         )
 
     def _create_draft(
         account, body, to, subject, cc, bcc, reply_to_message_id,
         attachment_ids, paperless_document_ids, paperless_original,
+        attachment_files=(), attachment_urls=(), inline_attachments=(),
     ) -> dict:
         acc = config.account(account)
         if acc is None:
             raise ValueError(f"Unknown account '{account}'")
         if paperless_document_ids and paperless is None:
             raise ValueError("Paperless is not configured (PAPERLESS_URL/PAPERLESS_API_TOKEN)")
+        if attachment_files and not config.attachment_dir:
+            raise ValueError("No attachment folder is configured (ATTACHMENT_DIR)")
 
         in_reply_to: str | None = None
         if reply_to_message_id is not None:
@@ -231,6 +260,18 @@ def build_app(config: Config, db: Database, sync: SyncWorker) -> FastMCP:
             files.append((att.filename, att.mime_type, att.data))
         for doc_id in paperless_document_ids:
             files.append(paperless.download(doc_id, original=paperless_original))
+
+        def room_left() -> int:
+            return MAX_DRAFT_ATTACHMENT_BYTES - sum(len(d) for _, _, d in files)
+
+        # The size caps below are checked while reading, so an oversized file
+        # is refused before it is downloaded or loaded completely.
+        for rel in attachment_files:
+            files.append(read_drop_file(config.attachment_dir, rel, room_left()))
+        for url in attachment_urls:
+            files.append(download_url(url, room_left()))
+        for spec in inline_attachments:
+            files.append(read_inline(spec, room_left()))
         total = sum(len(data) for _, _, data in files)
         if total > MAX_DRAFT_ATTACHMENT_BYTES:
             raise ValueError(
@@ -267,6 +308,19 @@ def build_app(config: Config, db: Database, sync: SyncWorker) -> FastMCP:
                 for name, mime, data in files
             ],
         }
+
+    @mcp.tool()
+    def list_attachment_files(query: str | None = None, limit: int = 100) -> list[dict]:
+        """List files in the server's attachment drop folder, newest first.
+
+        The drop folder is how files that live outside any mail reach a draft:
+        the user puts them there from any device (a synced cloud folder).
+        Pass a returned ``path`` to ``create_draft(attachment_files=[...])``.
+        ``query`` filters by (part of) the path, case-insensitively.
+        """
+        if not config.attachment_dir:
+            raise ValueError("No attachment folder is configured (ATTACHMENT_DIR)")
+        return list_drop_files(config.attachment_dir, query, limit)
 
     @mcp.tool()
     async def list_drafts(account: str, limit: int = 50) -> list[dict]:

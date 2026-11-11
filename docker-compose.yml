@@ -8,12 +8,17 @@ services:
     environment:
       # Persist the index inside the named volume regardless of .env DB_PATH.
       DB_PATH: /data/index.db
+      # Drop folder for draft attachments (see ATTACHMENT_HOST_DIR below).
+      ATTACHMENT_DIR: /attachments
     ports:
       # Phase 1: expose only on the home network. Bind to a LAN interface or
       # keep behind your firewall; do NOT publish publicly without auth (Phase 2).
       - "${HOST_PORT:-8000}:8000"
     volumes:
       - index-data:/data
+      # Files that create_draft may attach by path (read-only). Point
+      # ATTACHMENT_HOST_DIR at a synced cloud folder to fill it from any device.
+      - "${ATTACHMENT_HOST_DIR:-./attachments}:/attachments:ro"
 
 volumes:
   index-data:
