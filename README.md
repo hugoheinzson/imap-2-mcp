@@ -5,10 +5,11 @@ Claude. It combines **live IMAP access** with a **local SQLite FTS5 index**
 that also covers **attachment contents** (PDF/DOCX/XLSX/text), so full-text
 search stays fast even for large mailboxes (50k+ messages).
 
-> Read-only against existing mail: it never sends, deletes, moves, or flags
-> anything. The single write operation is `create_draft`, which APPENDs a
-> new draft to the drafts folder — sending stays a manual step in your mail
-> client (there is no SMTP in this project).
+> Read-only against existing mail: it never sends, moves, or flags anything.
+> The only write operations concern drafts: `create_draft` APPENDs a new
+> draft to the drafts folder, and `delete_draft` removes a message from it —
+> but only one that is flagged `\Draft` (all other mail is refused). Sending
+> stays a manual step in your mail client (there is no SMTP in this project).
 
 See [`SPEC.md`](./SPEC.md) for the full design and rationale.
 
@@ -21,13 +22,17 @@ See [`SPEC.md`](./SPEC.md) for the full design and rationale.
   reply, optionally with attachments taken from indexed mails
   (`attachment_ids`) or Paperless-ngx (`paperless_document_ids`, max 20 MB in
   total) — in the account's drafts folder; never sends.
+- Draft management: `list_drafts` shows the drafts folder live,
+  `delete_draft` permanently removes one draft (by `uid` or `message_id`;
+  refuses anything not flagged `\Draft`).
 - Optional Paperless-ngx hand-off (`send_attachment_to_paperless`): re-fetch
   an attachment from IMAP and upload it straight to Paperless — the file
   never passes through the client. Enabled via `PAPERLESS_URL` +
   `PAPERLESS_API_TOKEN`.
 - MCP tools over streamable HTTP (client may run on another machine):
   `list_mailboxes`, `list_recent`, `get_email`, `get_thread`, `search`,
-  `search_attachments`, `get_attachment_text`, `create_draft`, `sync_status`
+  `search_attachments`, `get_attachment_text`, `create_draft`, `list_drafts`,
+  `delete_draft`, `sync_status`
   (+ `send_attachment_to_paperless` when configured).
 
 ## Quick start

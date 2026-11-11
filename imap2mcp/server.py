@@ -1,10 +1,12 @@
 """MCP server exposing search/read tools over the local index, plus drafts.
 
 Search and reads are served from the SQLite/FTS index (fast, offline);
-``list_mailboxes`` queries IMAP live. ``create_draft`` is the only tool that
-writes to IMAP: it APPENDs a draft (optionally with attachments re-fetched
-from IMAP or Paperless) to the account's drafts folder — mail can never be
-sent from here (there is no SMTP in this project). The optional
+``list_mailboxes`` and ``list_drafts`` query IMAP live. ``create_draft`` and
+``delete_draft`` are the only tools that write to IMAP: the first APPENDs a
+draft (optionally with attachments re-fetched from IMAP or Paperless) to the
+account's drafts folder, the second removes a message from that folder, but
+only if it is flagged as a draft — mail can never be sent from here (there is
+no SMTP in this project). The optional
 ``send_attachment_to_paperless`` re-fetches an attachment read-only and posts
 it to Paperless-ngx; it never changes the mailbox. Transport is streamable
 HTTP so the client may run on a different machine than this server.
@@ -265,6 +267,66 @@ def build_app(config: Config, db: Database, sync: SyncWorker) -> FastMCP:
                 for name, mime, data in files
             ],
         }
+
+    @mcp.tool()
+    async def list_drafts(account: str, limit: int = 50) -> list[dict]:
+        """List the drafts in the account's IMAP drafts folder (live, newest first).
+
+        Returns ``uid``, ``message_id``, ``to``, ``subject`` and ``date`` per
+        draft — the identifiers ``delete_draft`` accepts. ``create_draft``
+        returns the same ``uid``/``message_id`` for the draft it just stored.
+        """
+        return await anyio.to_thread.run_sync(lambda: _list_drafts(account, limit))
+
+    def _list_drafts(account: str, limit: int) -> list[dict]:
+        acc = config.account(account)
+        if acc is None:
+            raise ValueError(f"Unknown account '{account}'")
+        with ImapConnection(acc) as conn:
+            folder = conn.find_drafts_folder()
+            return [
+                {"folder": folder, **d}
+                for d in conn.list_drafts(folder, min(max(limit, 1), 200))
+            ]
+
+    @mcp.tool()
+    async def delete_draft(
+        account: str,
+        uid: int | None = None,
+        message_id: str | None = None,
+    ) -> dict:
+        """Permanently delete one draft from the account's IMAP drafts folder.
+
+        Identify the draft by ``uid`` or by its ``message_id`` header (both are
+        returned by ``create_draft`` and ``list_drafts``) — exactly one of the
+        two. Only messages flagged as drafts in the drafts folder can be
+        deleted; any other mail is refused. Deleted drafts are gone, not moved
+        to the trash. Returns what was deleted (subject, recipient, date).
+        """
+        return await anyio.to_thread.run_sync(
+            lambda: _delete_draft(account, uid, message_id)
+        )
+
+    def _delete_draft(account: str, uid: int | None, message_id: str | None) -> dict:
+        acc = config.account(account)
+        if acc is None:
+            raise ValueError(f"Unknown account '{account}'")
+        with ImapConnection(acc) as conn:
+            folder = conn.find_drafts_folder()
+            deleted = conn.delete_draft(folder, uid=uid, message_id=message_id)
+        # The sync worker never notices deletions, so drop the stale index
+        # rows (the drafts folder itself, or e.g. Gmail's All-Mail copy).
+        if deleted["message_id"]:
+            with db.connect() as conn:
+                conn.execute(
+                    "DELETE FROM messages WHERE account = ? AND message_id = ?",
+                    (account, deleted["message_id"]),
+                )
+                conn.commit()
+        logger.info(
+            "Draft deleted: account=%s folder=%s uid=%s", account, folder, deleted["uid"]
+        )
+        return {"account": account, "folder": folder, "deleted": True, **deleted}
 
     @mcp.tool()
     def sync_status() -> dict:

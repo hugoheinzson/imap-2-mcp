@@ -73,12 +73,19 @@ Search (over the FTS5 index):
 Status:
 - `sync_status` — last sync time and indexed message count per account
 
-Drafts (the only writing tool):
+Drafts (the only writing tools):
 - `create_draft` — build an RFC 5322 draft (plain text; optionally threaded
   as a reply to an indexed message via `In-Reply-To`/`References`) and store
   it in the account's drafts folder via IMAP APPEND with the `\Draft` flag.
   The drafts folder is detected via the SPECIAL-USE `\Drafts` flag, with a
   fallback to well-known names. Never sends — there is no SMTP.
+- `list_drafts` — live listing of the drafts folder (uid, Message-ID, to,
+  subject, date), the identifiers `delete_draft` accepts.
+- `delete_draft` — remove one draft by UID or `Message-ID` header. Fenced:
+  the message must be flagged `\Draft` and live in the drafts folder; it is
+  removed with `STORE \Deleted` + `UID EXPUNGE` (servers without UIDPLUS are
+  refused, so no other `\Deleted` message can be swept away). The draft is
+  gone, not moved to the trash; its index rows are dropped as well.
 
 Archiving (optional, only registered when Paperless is configured):
 - `send_attachment_to_paperless` — the index stores attachment text only, so
@@ -130,9 +137,11 @@ Via environment variables (no secrets in the repo):
 
 ## Security
 
-- **Read-only against existing mail** — no deleting, moving, or flag changes,
-  and no SMTP. The single write operation is the IMAP APPEND behind
-  `create_draft`, which only ever adds a new message to the drafts folder.
+- **Read-only against existing mail** — no moving or flag changes on
+  ordinary mail, and no SMTP. The only write operations are the IMAP APPEND
+  behind `create_draft` (adds a new message to the drafts folder) and the
+  fenced `delete_draft` (removes a `\Draft`-flagged message from the drafts
+  folder, nothing else).
 - Credentials live only in the local environment, never in the repo.
 - Without `API_TOKEN` the endpoint is unauthenticated and must stay on a
   trusted network; set `API_TOKEN` before exposing it more widely.

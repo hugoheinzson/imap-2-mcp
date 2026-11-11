@@ -2,9 +2,11 @@
 
 Mailboxes are always opened with ``readonly=True`` (EXAMINE, not SELECT), so
 flags such as \\Seen are not altered by reading or syncing. The single
-deliberate exception to "no writing IMAP commands" is ``append_draft``: it
-APPENDs a new message to the drafts folder and never modifies or deletes
-existing messages (no SELECT in write mode, no STORE/EXPUNGE/COPY).
+deliberate exceptions to "no writing IMAP commands" are the two draft
+operations: ``append_draft`` APPENDs a new message to the drafts folder, and
+``delete_draft`` removes one message — only if it is flagged ``\\Draft`` and
+lives in the drafts folder (STORE \\Deleted + UID EXPUNGE, nothing else).
+Everything else never modifies, moves or deletes messages.
 """
 
 from __future__ import annotations
@@ -248,3 +250,74 @@ class ImapConnection:
         resp = self.client.append(folder, raw, flags=[b"\\Draft"])
         match = re.search(rb"APPENDUID \d+ (\d+)", resp or b"")
         return int(match.group(1)) if match else None
+
+    _DRAFT_HEADERS = b"BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM TO SUBJECT DATE)]"
+
+    @staticmethod
+    def _draft_summary(uid: int, item: dict) -> dict:
+        flags = {f.decode() if isinstance(f, bytes) else f for f in item.get(b"FLAGS", ())}
+        header = next(
+            (v for k, v in item.items() if isinstance(k, bytes) and k.startswith(b"BODY[HEADER")),
+            b"",
+        )
+        msg = email.message_from_bytes(header or b"")
+        return {
+            "uid": uid,
+            "message_id": (msg.get("Message-ID") or "").strip() or None,
+            "to": _decode(msg.get("To")),
+            "subject": _decode(msg.get("Subject")),
+            "date": _iso_date(msg),
+            "is_draft": "\\Draft" in flags,
+        }
+
+    def list_drafts(self, folder: str, limit: int = 50) -> list[dict]:
+        """List messages in the drafts folder, newest first (read-only)."""
+        self.examine(folder)
+        uids = sorted(self.client.search(["ALL"]), reverse=True)[:limit]
+        if not uids:
+            return []
+        resp = self.client.fetch(uids, ["FLAGS", self._DRAFT_HEADERS])
+        return [self._draft_summary(uid, resp[uid]) for uid in uids if uid in resp]
+
+    def delete_draft(
+        self, folder: str, uid: int | None = None, message_id: str | None = None
+    ) -> dict:
+        """Permanently delete one draft from the drafts folder.
+
+        The second deliberate write operation next to ``append_draft``. It is
+        narrowly fenced: the message must carry the ``\\Draft`` flag and live
+        in ``folder`` (the caller passes the drafts folder), it is addressed
+        by UID or ``Message-ID`` header, and the expunge is a UID EXPUNGE so
+        that no other message flagged ``\\Deleted`` is swept away with it.
+        Servers without UIDPLUS are refused rather than risking that.
+        """
+        if (uid is None) == (message_id is None):
+            raise ValueError("Pass exactly one of 'uid' or 'message_id'")
+        if not self.client.has_capability("UIDPLUS"):
+            raise ValueError(
+                "IMAP server lacks UIDPLUS; refusing to expunge without UID EXPUNGE"
+            )
+        self.client.select_folder(folder, readonly=False)
+        if message_id is not None:
+            wanted = message_id.strip()
+            if not wanted.startswith("<"):
+                wanted = f"<{wanted}>"
+            found = self.client.search(["HEADER", "Message-ID", wanted])
+            if not found:
+                raise ValueError(f"No draft with Message-ID {wanted} in '{folder}'")
+            if len(found) > 1:
+                raise ValueError(
+                    f"Message-ID {wanted} is ambiguous in '{folder}' (UIDs {found}); use 'uid'"
+                )
+            uid = found[0]
+        resp = self.client.fetch([uid], ["FLAGS", self._DRAFT_HEADERS])
+        if uid not in resp:
+            raise ValueError(f"No message with UID {uid} in '{folder}'")
+        summary = self._draft_summary(uid, resp[uid])
+        if not summary["is_draft"]:
+            raise ValueError(
+                f"UID {uid} in '{folder}' is not flagged \\Draft; refusing to delete it"
+            )
+        self.client.add_flags([uid], [b"\\Deleted"])
+        self.client.expunge([uid])  # UID EXPUNGE (UIDPLUS)
+        return summary
